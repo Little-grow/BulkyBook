@@ -2,10 +2,12 @@ using System.Diagnostics;
 using System.Security.Claims;
 using Bulky.DataAccess.Repository;
 using Bulky.DataAccess.Repository.IRepository;
+using Bulky.DataAccess.Data;
 using Bulky.Models;
 using Bulky.Utility;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 
 namespace Bulky_MVC.Areas.Customer.Controllers
 {
@@ -14,11 +16,12 @@ namespace Bulky_MVC.Areas.Customer.Controllers
     {
         private readonly ILogger<HomeController> _logger;
         private readonly IUnitOfWork _unit;
-
-        public HomeController(ILogger<HomeController> logger , IUnitOfWork unit)
+        private readonly AppDbContext _context;
+        public HomeController(ILogger<HomeController> logger , IUnitOfWork unit, AppDbContext context)
         {
             _logger = logger;
             _unit = unit;
+            _context = context;
         }
 
         public IActionResult Index()
@@ -41,33 +44,49 @@ namespace Bulky_MVC.Areas.Customer.Controllers
 
         [HttpPost]
         [Authorize]
-        public IActionResult Details(ShoppingCart shoppingCart)
+        public async Task<IActionResult> Details(ShoppingCart shoppingCart)
         {
             var claimsIdentity = (ClaimsIdentity)User.Identity;
-            var userId = claimsIdentity.FindFirst(ClaimTypes.NameIdentifier).Value;
+            var userId = claimsIdentity.FindFirst(ClaimTypes.NameIdentifier)?.Value;
             shoppingCart.AppUserId = userId;
 
-            //ShoppingCart cartFromDb = _unit.ShoppingCart.Get(u => u.AppUserId == userId &&
-            //u.ProductId == shoppingCart.ProductId);
+            var cartFromDb = await _context.ShoppingCarts
+                .FirstOrDefaultAsync(s => s.AppUserId == userId);
 
-            //if (cartFromDb != null)
-            //{
-            //    //shopping cart exists
-            //    cartFromDb.Count += shoppingCart.Count;
-            //    _unit.ShoppingCart.Update(cartFromDb);
-            //    // _unit.Save();
-            //}
-            //else
-            //{
-            //    //add cart record
-               _unit.ShoppingCart.Add(shoppingCart);
-               _unit.Save();
+            var product = await _context.Products
+                .FirstOrDefaultAsync(p => p.Id == shoppingCart.ProductId);
 
-            //}
-            //TempData["success"] = "Cart updated successfully";
+            if (product is null)
+            {
+                return View(); 
+            }
 
-            return View() /*RedirectToAction(nameof(Index))*/;
+            if (cartFromDb != null)
+            {
+                // Update existing cart entry
+                cartFromDb.Count += shoppingCart.Count;
+                _context.ShoppingCarts.Update(cartFromDb); 
+            }
+            else
+            {
+                // Add new cart record (ID should be auto-generated)
+                var newCart = new ShoppingCart
+                {
+                    ProductId = shoppingCart.ProductId,
+                    AppUserId = shoppingCart.AppUserId,
+                    Product = product,
+                    Count = shoppingCart.Count
+                };
+
+                await _context.ShoppingCarts.AddAsync(newCart);
+            }
+
+            await _context.SaveChangesAsync(); // Ensure async save
+
+            TempData["success"] = "Cart updated successfully";
+            return View();
         }
+
 
         public IActionResult Privacy()
         {
